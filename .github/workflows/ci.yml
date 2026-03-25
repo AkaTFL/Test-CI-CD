@@ -56,7 +56,6 @@ jobs:
       - name: Scan application files
         uses: aquasecurity/trivy-action@v0.33.1
         with:
-          image-ref: 'devops-app:${{ github.sha }}'
           scan-type: 'fs'
           scan-ref: 'app/'
           severity: 'HIGH,CRITICAL'
