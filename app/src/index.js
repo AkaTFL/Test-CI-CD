@@ -1,33 +1,12 @@
-const http = require("http");
-const { add } = require("./math");
+const http = require('http');
+const { add } = require('./math');
 
 const durationBuckets = [0.05, 0.1, 0.2, 0.5, 1, 2];
 const requestCounts = new Map();
 const requestDurations = new Map();
 
-function encodeLabels(labels) {
-  return JSON.stringify(labels);
-}
-
-function decodeLabels(key) {
-  return JSON.parse(key);
-}
-
-function escapeLabelValue(value) {
-  return String(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/"/g, '\\"');
-}
-
-function formatLabels(labels) {
-  return Object.entries(labels)
-    .map(([key, value]) => `${key}="${escapeLabelValue(value)}"`)
-    .join(",");
-}
-
-function observeRequest(labels, durationSeconds) {
-  const key = encodeLabels(labels);
+function observe(labels, durationSeconds) {
+  const key = JSON.stringify(labels);
   requestCounts.set(key, (requestCounts.get(key) || 0) + 1);
 
   const stats = requestDurations.get(key) || {
@@ -50,98 +29,84 @@ function observeRequest(labels, durationSeconds) {
 
 function renderMetrics() {
   const lines = [
-    "# HELP http_requests_total Total number of HTTP requests.",
-    "# TYPE http_requests_total counter"
+    '# HELP http_requests_total Total number of HTTP requests.',
+    '# TYPE http_requests_total counter'
   ];
 
   for (const [key, count] of requestCounts.entries()) {
-    lines.push(`http_requests_total{${formatLabels(decodeLabels(key))}} ${count}`);
+    const labels = JSON.parse(key);
+    const labelString = Object.entries(labels)
+      .map(([name, value]) => `${name}="${value}"`)
+      .join(',');
+    lines.push(`http_requests_total{${labelString}} ${count}`);
   }
 
-  lines.push("# HELP http_request_duration_seconds HTTP request duration in seconds.");
-  lines.push("# TYPE http_request_duration_seconds histogram");
+  lines.push('# HELP http_request_duration_seconds HTTP request duration in seconds.');
+  lines.push('# TYPE http_request_duration_seconds histogram');
 
   for (const [key, stats] of requestDurations.entries()) {
-    const labels = decodeLabels(key);
+    const labels = JSON.parse(key);
+    const baseLabels = Object.entries(labels)
+      .map(([name, value]) => `${name}="${value}"`)
+      .join(',');
 
     durationBuckets.forEach((bucket, index) => {
       lines.push(
-        `http_request_duration_seconds_bucket{${formatLabels({
-          ...labels,
-          le: bucket
-        })}} ${stats.buckets[index]}`
+        `http_request_duration_seconds_bucket{${baseLabels},le="${bucket}"} ${stats.buckets[index]}`
       );
     });
 
     lines.push(
-      `http_request_duration_seconds_bucket{${formatLabels({
-        ...labels,
-        le: "+Inf"
-      })}} ${stats.count}`
+      `http_request_duration_seconds_bucket{${baseLabels},le="+Inf"} ${stats.count}`
     );
-    lines.push(
-      `http_request_duration_seconds_sum{${formatLabels(labels)}} ${stats.sum.toFixed(6)}`
-    );
-    lines.push(`http_request_duration_seconds_count{${formatLabels(labels)}} ${stats.count}`);
+    lines.push(`http_request_duration_seconds_sum{${baseLabels}} ${stats.sum.toFixed(6)}`);
+    lines.push(`http_request_duration_seconds_count{${baseLabels}} ${stats.count}`);
   }
 
-  return `${lines.join("\n")}\n`;
-}
-
-function writeJson(res, statusCode, payload) {
-  res.writeHead(statusCode, { "Content-Type": "application/json" });
-  res.end(JSON.stringify(payload));
+  return `${lines.join('\n')}\n`;
 }
 
 const server = http.createServer((req, res) => {
   const startedAt = process.hrtime.bigint();
-  const method = req.method || "GET";
-  const path = new URL(req.url || "/", "http://localhost").pathname;
+  const path = new URL(req.url || '/', 'http://localhost').pathname;
   let statusCode = 200;
 
   try {
-    if (path === "/metrics") {
-      const body = renderMetrics();
+    if (path === '/metrics') {
       res.writeHead(200, {
-        "Content-Type": "text/plain; version=0.0.4; charset=utf-8"
+        'Content-Type': 'text/plain; version=0.0.4; charset=utf-8'
       });
-      res.end(body);
+      res.end(renderMetrics());
       return;
     }
 
-    if (path === "/health") {
-      writeJson(res, 200, { status: "healthy" });
+    if (path === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'healthy' }));
       return;
     }
 
-    if (path === "/") {
-      writeJson(res, 200, { status: "ok", result: add(2, 3) });
+    if (path === '/') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok', result: add(2, 3) }));
       return;
     }
 
     statusCode = 404;
-    writeJson(res, statusCode, { error: "Not found" });
-  } catch (error) {
-    statusCode = 500;
-    writeJson(res, statusCode, {
-      error: "Internal server error",
-      message: error instanceof Error ? error.message : "Unknown error"
-    });
+    res.writeHead(statusCode, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not found' }));
   } finally {
     const durationSeconds = Number(process.hrtime.bigint() - startedAt) / 1_000_000_000;
-    observeRequest(
+    observe(
       {
-        method,
+        method: req.method || 'GET',
         path,
-        status: statusCode
+        status: String(statusCode)
       },
       durationSeconds
     );
   }
 });
 
-const port = Number(process.env.PORT || 3000);
-
-server.listen(port, () => {
-  console.log(`Server running on port ${port}`);
-});
+const PORT = process.env.PORT || 3000;
+server.listen(PORT, () => console.log(`Server running on port ${PORT}`));
