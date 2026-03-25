@@ -43,9 +43,23 @@ jobs:
         with:
           context: ./app
           push: false
+          load: true
           tags: devops-app:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+      - name: Smoke test - verify endpoints
+        run: |
+          docker run -d --name smoke-test -p 3000:3000 devops-app:${{ github.sha }}
+          sleep 1
+          
+          curl -f http://localhost:3000/ | grep -q "ok" && echo "✓ / endpoint OK" || exit 1
+          
+          curl -f http://localhost:3000/health | grep -q "healthy" && echo "✓ /health endpoint OK" || exit 1
+          
+          curl -f http://localhost:3000/metrics | grep -q "http_requests_total" && echo "✓ /metrics endpoint OK" || exit 1
+          
+          docker stop smoke-test
+          docker rm smoke-test
 
   # Stage 3 : Scan de sécurité
   security:
